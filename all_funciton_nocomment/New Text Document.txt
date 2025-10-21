@@ -1,0 +1,4 @@
+เชื่อม database(firebase)
+แสดงหน้า Dashboard (DHT, Ultrasonic, BH1750)
+แจ้งเตือน Telegram ตามเงื่อนไข
+การทำงาน LED ตามเงื่อนไข

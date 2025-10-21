@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="th"> <!-- ภาษาไทย -->
+<head>
+  <meta charset="utf-8" /> <!-- กำหนด encoding -->
+  <meta name="viewport" content="width=device-width,initial-scale=1" /> <!-- รองรับมือถือ -->
+  <title>DHT Realtime Dashboard</title> <!-- ชื่อหน้า -->
+  <style>
+    body{margin:0;font-family:system-ui,Segoe UI,Roboto,Prompt,TH Sarabun New,Arial;background:#0b0f17;color:#e5e7eb} /* ธีมเข้ม + ฟอนต์ระบบ */
+    .wrap{max-width:1100px;margin:32px auto;padding:0 16px} /* คอนเทนเนอร์กว้าง 1100px */
+    #status{color:#9ca3af;margin-bottom:16px} /* ข้อความสถานะ */
+    .grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))} /* การ์ดแบบกริดยืดหยุ่น */
+    .card{border:1px solid #374151;border-radius:16px;padding:16px;background:#111827} /* สไตล์การ์ด */
+    .label{font-size:14px;color:#9ca3af;margin-bottom:4px} /* ป้ายเล็ก */
+    .value{font-size:40px;font-weight:800} /* ตัวเลขใหญ่ */
+    .card.chart-card{height:auto} /* การ์ดกราฟปรับสูงอัตโนมัติ */
+    .chart-wrap{position:relative;height:260px} /* กล่องล็อกความสูงกราฟ 260px */
+    .chart-wrap canvas{display:block;width:100% !important;height:100% !important} /* แคนวาสเต็มกล่อง */
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script> <!-- โหลด Chart.js -->
+</head>
+<body>
+  <div class="wrap"> <!-- คอนเทนเนอร์กลาง -->
+    <h1>DHT Realtime Dashboard</h1> <!-- หัวข้อหน้า -->
+    <div id="status">กำลังเชื่อมต่อ…</div> <!-- สถานะการเชื่อมต่อ -->
+
+    <div class="grid"> <!-- แถวการ์ดตัวเลข -->
+      <div class="card"> <!-- การ์ดอุณหภูมิ -->
+        <div class="label">Temperature (°C)</div> <!-- ป้าย -->
+        <div class="value" id="temp">--</div> <!-- ค่า temp -->
+        <div class="label">อัปเดตล่าสุด: <span id="updated">--</span></div> <!-- เวลาล่าสุด -->
+      </div>
+      <div class="card"> <!-- การ์ดความชื้น -->
+        <div class="label">Humidity (%)</div>
+        <div class="value" id="hum">--</div> <!-- ค่า humidity -->
+      </div>
+      <div class="card"> <!-- การ์ดระยะทาง -->
+        <div class="label">Distance (cm) — Ultrasonic</div>
+        <div class="value" id="dist">--</div> <!-- ค่า distance -->
+      </div>
+      <div class="card"> <!-- การ์ดแสง -->
+        <div class="label">Light (lux) — BH1750</div>
+        <div class="value" id="lux">--</div> <!-- ค่า lux -->
+      </div>
+    </div>
+
+    <div class="card chart-card" style="margin-top:16px"> <!-- การ์ดกราฟ Temp -->
+      <div class="label">Temperature (30 จุดล่าสุด)</div> <!-- คำอธิบาย -->
+      <div class="chart-wrap"><canvas id="chartTemp"></canvas></div> <!-- แคนวาส Temp -->
+    </div>
+
+    <div class="card chart-card" style="margin-top:16px"> <!-- การ์ดกราฟ Distance -->
+      <div class="label">Distance (30 จุดล่าสุด)</div>
+      <div class="chart-wrap"><canvas id="chartDist"></canvas></div> <!-- แคนวาส Dist -->
+    </div>
+
+    <div class="card chart-card" style="margin-top:16px"> <!-- การ์ดกราฟ Lux -->
+      <div class="label">Light (Lux) — 30 จุดล่าสุด</div>
+      <div class="chart-wrap"><canvas id="chartLux"></canvas></div> <!-- แคนวาส Lux -->
+    </div>
+  </div>
+
+  <script type="module"> <!-- ใช้ ES module -->
+    // ===== Firebase Config ของโปรเจ็กต์คุณ =====
+    const firebaseConfig = {                                                    // ออบเจ็กต์ตั้งค่า Firebase
+      apiKey:       "AIzaSyDl8rqmcgSoCXnJO28PCO5Ntvvo16bz1AE",                 // คีย์ API
+      authDomain:   "testexsamplefinaliot01.firebaseapp.com",                  // โดเมน auth
+      databaseURL:  "https://testexsamplefinaliot01-default-rtdb.asia-southeast1.firebasedatabase.app", // RTDB URL
+      projectId:    "testexsamplefinaliot01",                                  // ไอดีโปรเจ็กต์
+      appId:        "1:301574166269:web:754c3eb0f39adc48065094"                // แอพไอดี
+    };
+
+    const USE_ANON_AUTH = true;                                                // ใช้ Anonymous Auth (ควรเปิดใน Console)
+
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js";                 // init app
+    import { getDatabase, ref, onValue, query, limitToLast } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-database.js"; // RTDB
+    import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-auth.js";    // Auth
+
+    const app  = initializeApp(firebaseConfig);                                // เริ่ม Firebase app
+    const db   = getDatabase(app);                                             // อ้างอิงฐานข้อมูล
+    const auth = getAuth(app);                                                 // อ้างอิง auth
+
+    const statusEl  = document.getElementById("status");                       // สถานะ UI
+    const tempEl    = document.getElementById("temp");                         // ช่องอุณหภูมิ
+    const humEl     = document.getElementById("hum");                          // ช่องความชื้น
+    const distEl    = document.getElementById("dist");                         // ช่องระยะ
+    const luxEl     = document.getElementById("lux");                          // ช่องแสง
+    const updatedEl = document.getElementById("updated");                      // ช่องเวลาอัปเดตล่าสุด
+
+    const canvasTemp = document.getElementById("chartTemp");                   // แคนวาส Temp
+    const canvasDist = document.getElementById("chartDist");                   // แคนวาส Distance
+    const canvasLux  = document.getElementById("chartLux");                    // แคนวาส Lux
+
+    let tempChart, distChart, luxChart;                                        // ตัวแปรกราฟ
+    let labels = [], temps = [], dists = [], luxs = [];                        // อาร์เรย์ข้อมูลกราฟ
+
+    function start() {                                                         // เริ่มฟังข้อมูลหลัง auth ผ่าน
+      statusEl.textContent = "เชื่อมต่อแล้ว • กำลังฟังข้อมูล…";               // อัปเดตสถานะ
+
+      onValue(ref(db, `/latest`), snap => {                                    // ฟัง /latest แบบ realtime
+        const v = snap.val(); if (!v) return;                                  // ถ้าไม่มีค่า ให้จบ
+        const t  = Number(v.temperature);                                      // แปลง temp เป็นจำนวน
+        const h  = Number(v.humidity);                                         // แปลง hum
+        const d  = Number(v.distance);                                         // แปลง dist
+        const lx = Number(v.lux);                                              // แปลง lux
+        tempEl.textContent = Number.isFinite(t)  ? t.toFixed(1)  : "--";       // แสดง temp
+        humEl.textContent  = Number.isFinite(h)  ? h.toFixed(1)  : "--";       // แสดง hum
+        distEl.textContent = Number.isFinite(d)  ? d.toFixed(1)  : "--";       // แสดง dist
+        luxEl.textContent  = Number.isFinite(lx) ? lx.toFixed(1) : "--";       // แสดง lux
+        if (v.ts) updatedEl.textContent = new Date(Number(v.ts)).toLocaleString(); // แสดงเวลาอัปเดต
+      });
+
+      const q = query(ref(db, `/history`), limitToLast(30));                   // คิวรีประวัติ 30 จุด
+      onValue(q, snap => {                                                     // ฟังเมื่อข้อมูลเปลี่ยน
+        const obj = snap.val() || {};                                          // ดึงอ็อบเจ็กต์
+        const items = Object.keys(obj).sort((a,b)=>Number(a)-Number(b))        // เรียงตามเวลา
+          .map(k => ({ ts:+k, ...obj[k] }));                                   // map เป็นรายการ {ts,...}
+
+        labels = items.map(i => new Date(i.ts).toLocaleTimeString());          // สร้าง labels เป็นเวลา
+        temps  = items.map(i => Number(i.temperature));                         // ชุดข้อมูล temp
+        dists  = items.map(i => Number(i.distance));                            // ชุดข้อมูล distance
+        luxs   = items.map(i => Number(i.lux));                                 // ชุดข้อมูล lux
+        render();                                                               // วาดกราฟ
+      });
+    }
+
+    function makeLineChart(canvasEl, label, data){                              // สร้างกราฟเส้นหนึ่งอัน
+      return new Chart(canvasEl.getContext("2d"), {                             // ใช้ context 2D
+        type:"line",                                                            // ประเภทกราฟ line
+        data:{ labels, datasets:[{ label, data, tension:.25, pointRadius:2 }] },// ชุดข้อมูล
+        options:{                                                               // ตัวเลือกกราฟ
+          responsive:true,                                                      // responsive
+          maintainAspectRatio:false,                                            // ใช้ความสูงจาก .chart-wrap
+          scales:{                                                              // ตั้งค่าสเกล/แกน
+            x:{ ticks:{ color:"#9ca3af" }, grid:{ color:"#1f2937" } },          // สีแกน X
+            y:{ ticks:{ color:"#9ca3af" }, grid:{ color:"#1f2937" } }           // สีแกน Y
+          },
+          plugins:{ legend:{ labels:{ color:"#e5e7eb" } } },                    // สีข้อความ legend
+          animation:false                                                       // ปิดแอนิเมชันเพื่อความลื่น
+        }
+      });
+    }
+
+    function render(){                                                          // วาด/อัปเดตกราฟทั้งหมด
+      if (tempChart) tempChart.destroy();                                       // ล้างกราฟเก่า
+      if (distChart) distChart.destroy();                                       // ล้างกราฟเก่า
+      if (luxChart)  luxChart.destroy();                                        // ล้างกราฟเก่า
+      tempChart = makeLineChart(canvasTemp, "Temperature (°C)", temps);         // กราฟ Temp
+      distChart = makeLineChart(canvasDist, "Distance (cm)", dists);            // กราฟ Distance
+      luxChart  = makeLineChart(canvasLux,  "Light (lux)",     luxs);           // กราฟ Lux
+    }
+
+    if (USE_ANON_AUTH){                                                          // ถ้าใช้ Anonymous Auth
+      statusEl.textContent = "กำลังลงชื่อเข้าใช้แบบ Anonymous…";                 // สถานะหน้าจอ
+      signInAnonymously(auth).catch(err=>{                                      // ล็อกอินนิรนาม
+        statusEl.textContent = "Anonymous Auth ล้มเหลว: " + err.message;       // แสดง error
+        console.error(err);                                                     // log
+      });
+      onAuthStateChanged(auth, (u)=>{ if (u) start(); });                        // เมื่อ auth แล้ว ค่อย start()
+    } else {
+      start();                                                                   // ไม่ใช้ auth ก็เริ่มเลย (ต้องเปิด rules .read:true ชั่วคราว)
+    }
+  </script>
+</body>
+</html>
