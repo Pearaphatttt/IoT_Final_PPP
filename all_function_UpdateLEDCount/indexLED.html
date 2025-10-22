@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="th"> <!-- ภาษาไทย -->
+<head>
+  <meta charset="utf-8" /> <!-- กำหนด encoding -->
+  <meta name="viewport" content="width=device-width,initial-scale=1" /> <!-- รองรับมือถือ -->
+  <title>DHT Realtime Dashboard</title> <!-- ชื่อหน้า -->
+  <style>
+    body{margin:0;font-family:system-ui,Segoe UI,Roboto,Prompt,TH Sarabun New,Arial;background:#0b0f17;color:#e5e7eb} /* ธีมเข้ม + ฟอนต์ระบบ */
+    .wrap{max-width:1100px;margin:32px auto;padding:0 16px} /* คอนเทนเนอร์กว้าง 1100px */
+    #status{color:#9ca3af;margin-bottom:16px} /* ข้อความสถานะ */
+    .grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))} /* การ์ดแบบกริดยืดหยุ่น */
+    .card{border:1px solid #374151;border-radius:16px;padding:16px;background:#111827} /* สไตล์การ์ด */
+    .label{font-size:14px;color:#9ca3af;margin-bottom:4px} /* ป้ายเล็ก */
+    .value{font-size:40px;font-weight:800} /* ตัวเลขใหญ่ */
+    .card.chart-card{height:auto} /* การ์ดกราฟปรับสูงอัตโนมัติ */
+    .chart-wrap{position:relative;height:260px} /* กล่องล็อกความสูงกราฟ 260px */
+    .chart-wrap canvas{display:block;width:100% !important;height:100% !important} /* แคนวาสเต็มกล่อง */
+
+    /* ===== LED ONLY: สีสถานะ LED (ไม่พึ่ง Bootstrap) ===== */
+    .led-on  { color:#10b981; }  /* เขียว */
+    .led-off { color:#ef4444; }  /* แดง */
+    .muted   { color:#9ca3af; font-size:14px; }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script> <!-- โหลด Chart.js -->
+</head>
+<body>
+  <div class="wrap"> <!-- คอนเทนเนอร์กลาง -->
+    <h1>DHT Realtime Dashboard</h1> <!-- หัวข้อหน้า -->
+    <div id="status">กำลังเชื่อมต่อ…</div> <!-- สถานะการเชื่อมต่อ -->
+
+    <div class="grid"> <!-- แถวการ์ดตัวเลข -->
+      <div class="card"> <!-- การ์ดอุณหภูมิ -->
+        <div class="label">Temperature (°C)</div> <!-- ป้าย -->
+        <div class="value" id="temp">--</div> <!-- ค่า temp -->
+        <div class="label">อัปเดตล่าสุด: <span id="updated">--</span></div> <!-- เวลาล่าสุด -->
+      </div>
+      <div class="card"> <!-- การ์ดความชื้น -->
+        <div class="label">Humidity (%)</div>
+        <div class="value" id="hum">--</div> <!-- ค่า humidity -->
+      </div>
+      <div class="card"> <!-- การ์ดระยะทาง -->
+        <div class="label">Distance (cm) — Ultrasonic</div>
+        <div class="value" id="dist">--</div> <!-- ค่า distance -->
+      </div>
+      <div class="card"> <!-- การ์ดแสง -->
+        <div class="label">Light (lux) — BH1750</div>
+        <div class="value" id="lux">--</div> <!-- ค่า lux -->
+      </div>
+
+      <!-- ===== LED ONLY: การ์ด LED (เพิ่ม/แก้เฉพาะส่วนนี้) ===== -->
+      <div class="card">
+        <div class="label">LED RED (D7)</div>
+        <div class="value led-off" id="ledStatus">OFF</div>
+        <div class="muted">Count: <span id="ledCount">0</span></div>
+      </div>
+      <!-- ===== /LED ONLY ===== -->
+
+    </div> <!-- ปิด .grid ให้ครบ -->
+
+    <div class="card chart-card" style="margin-top:16px"> <!-- การ์ดกราฟ Temp -->
+      <div class="label">Temperature (30 จุดล่าสุด)</div> <!-- คำอธิบาย -->
+      <div class="chart-wrap"><canvas id="chartTemp"></canvas></div> <!-- แคนวาส Temp -->
+    </div>
+
+    <div class="card chart-card" style="margin-top:16px"> <!-- การ์ดกราฟ Distance -->
+      <div class="label">Distance (30 จุดล่าสุด)</div>
+      <div class="chart-wrap"><canvas id="chartDist"></canvas></div> <!-- แคนวาส Dist -->
+    </div>
+
+    <div class="card chart-card" style="margin-top:16px"> <!-- การ์ดกราฟ Lux -->
+      <div class="label">Light (Lux) — 30 จุดล่าสุด</div>
+      <div class="chart-wrap"><canvas id="chartLux"></canvas></div> <!-- แคนวาส Lux -->
+    </div>
+  </div>
+
+<script type="module">
+  const firebaseConfig = {
+    apiKey:       "AIzaSyDl8rqmcgSoCXnJO28PCO5Ntvvo16bz1AE",
+    authDomain:   "testexsamplefinaliot01.firebaseapp.com",
+    databaseURL:  "https://testexsamplefinaliot01-default-rtdb.asia-southeast1.firebasedatabase.app",
+    projectId:    "testexsamplefinaliot01",
+    appId:        "1:301574166269:web:754c3eb0f39adc48065094"
+  };
+  const USE_ANON_AUTH = true;
+
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js";
+  import { getDatabase, ref, onValue, query, limitToLast, get } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-database.js";
+  import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-auth.js";
+
+  const app  = initializeApp(firebaseConfig);
+  const db   = getDatabase(app);
+  const auth = getAuth(app);
+
+  const statusEl  = document.getElementById("status");
+  const tempEl    = document.getElementById("temp");
+  const humEl     = document.getElementById("hum");
+  const distEl    = document.getElementById("dist");
+  const luxEl     = document.getElementById("lux");
+  const updatedEl = document.getElementById("updated");
+
+  const canvasTemp = document.getElementById("chartTemp");
+  const canvasDist = document.getElementById("chartDist");
+  const canvasLux  = document.getElementById("chartLux");
+
+  const ledStatusEl = document.getElementById("ledStatus");
+  const ledCountEl  = document.getElementById("ledCount");
+
+  let tempChart, distChart, luxChart;
+  let labels = [], temps = [], dists = [], luxs = [];
+
+  function makeLineChart(canvasEl, label, data){
+    return new Chart(canvasEl.getContext("2d"), {
+      type:"line",
+      data:{ labels, datasets:[{ label, data, tension:.25, pointRadius:2 }] },
+      options:{
+        responsive:true,
+        maintainAspectRatio:false,
+        scales:{
+          x:{ ticks:{ color:"#9ca3af" }, grid:{ color:"#1f2937" } },
+          y:{ ticks:{ color:"#9ca3af" }, grid:{ color:"#1f2937" } }
+        },
+        plugins:{ legend:{ labels:{ color:"#e5e7eb" } } },
+        animation:false
+      }
+    });
+  }
+
+  function render(){
+    if (tempChart) tempChart.destroy();
+    if (distChart) distChart.destroy();
+    if (luxChart)  luxChart.destroy();
+    tempChart = makeLineChart(canvasTemp, "Temperature (°C)", temps);
+    distChart = makeLineChart(canvasDist, "Distance (cm)", dists);
+    luxChart  = makeLineChart(canvasLux,  "Light (lux)",     luxs);
+  }
+
+  function start(){
+    statusEl.textContent = "เชื่อมต่อแล้ว • กำลังฟังข้อมูล…";
+    console.log("[DB] start listening /latest and /history");
+
+    // --------- ONE-SHOT: ลองอ่าน /latest หนึ่งครั้งเพื่อตรวจ path/สิทธิ์ ----------
+    get(ref(db, `/latest`))
+      .then(s => {
+        console.log("[DB]/latest snapshot:", s.val());
+        if (!s.exists()) {
+          statusEl.textContent = "เชื่อมแล้ว แต่ /latest ไม่มีข้อมูล";
+        }
+      })
+      .catch(err => {
+        console.error("[DB] get(/latest) error:", err);
+        statusEl.textContent = "อ่าน /latest ไม่ได้: " + (err?.message || err);
+      });
+
+    // --------- SUBSCRIBE: /latest realtime ----------
+    onValue(ref(db, `/latest`), snap => {
+      try {
+        const v = snap.val();
+        if (!v) {
+          console.warn("[DB]/latest empty");
+          return;
+        }
+        console.log("[DB]/latest update:", v);
+        const t  = Number(v.temperature);
+        const h  = Number(v.humidity);
+        const d  = Number(v.distance);
+        const lx = Number(v.lux);
+        tempEl.textContent = Number.isFinite(t)  ? t.toFixed(1)  : "--";
+        humEl.textContent  = Number.isFinite(h)  ? h.toFixed(1)  : "--";
+        distEl.textContent = Number.isFinite(d)  ? d.toFixed(1)  : "--";
+        luxEl.textContent  = Number.isFinite(lx) ? lx.toFixed(1) : "--";
+        if (v.ts) updatedEl.textContent = new Date(Number(v.ts)).toLocaleString();
+
+        // LED ONLY
+        const isOn = (v.led === "ON");
+        ledStatusEl.textContent = isOn ? "ON" : "OFF";
+        ledStatusEl.classList.toggle("led-on",  isOn);
+        ledStatusEl.classList.toggle("led-off", !isOn);
+        ledCountEl.textContent  = (typeof v.count === "number") ? v.count : 0;
+      } catch(e) {
+        console.error("[UI] latest render error:", e);
+      }
+    }, err => {
+      console.error("[DB] onValue(/latest) error:", err);
+      statusEl.textContent = "ฟัง /latest ไม่ได้: " + (err?.message || err);
+    });
+
+    // --------- SUBSCRIBE: /history realtime (30 จุด) ----------
+    const q = query(ref(db, `/history`), limitToLast(30));
+    onValue(q, snap => {
+      try {
+        const obj = snap.val() || {};
+        const items = Object.keys(obj).sort((a,b)=>Number(a)-Number(b)).map(k => ({ ts:+k, ...obj[k] }));
+        labels = items.map(i => new Date(i.ts).toLocaleTimeString());
+        temps  = items.map(i => Number(i.temperature));
+        dists  = items.map(i => Number(i.distance));
+        luxs   = items.map(i => Number(i.lux));
+        render();
+      } catch(e) {
+        console.error("[UI] history render error:", e);
+      }
+    }, err => {
+      console.error("[DB] onValue(/history) error:", err);
+    });
+  }
+
+  if (USE_ANON_AUTH){
+    statusEl.textContent = "กำลังลงชื่อเข้าใช้แบบ Anonymous…";
+    signInAnonymously(auth).catch(err=>{
+      console.error("[AUTH] anonymous error:", err);
+      statusEl.textContent = "Anonymous Auth ล้มเหลว: " + (err?.message || err);
+    });
+    onAuthStateChanged(auth, (u)=>{
+      console.log("[AUTH] state:", u ? ("OK uid="+u.uid) : "no user");
+      if (u) start();
+    });
+  } else {
+    // โหมดไม่มี Auth: ต้องเปิด Rules .read:true ชั่วคราว
+    start();
+  }
+</script>
+
+</body>
+</html>
